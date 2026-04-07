@@ -41,7 +41,7 @@ pytest tests/ -v
 python benchmarks/matmul_bench.py
 ```
 
-## 🗺️ Roadmap & To-Do List
+## Roadmap & To-Do List
 
 ### Phase 1: Matrix Multiplication Deep Dive
 - [x] Naive 2D Grid MatMul
