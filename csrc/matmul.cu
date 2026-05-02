@@ -1,44 +1,79 @@
 #include <torch/extension.h>
-#define TILE_SIZE 32
+#define BLOCK_M 64
+#define BLOCK_N 64
+#define BLOCK_K 64
+#define THREAD_M 4
+#define THREAD_N 4
 
+#define THREADS_X (BLOCK_N / THREAD_N)
+#define THREADS_Y (BLOCK_M / THREAD_M)
 
-__global__ void matmul_kernel(const float *a, 
+__host__ __device__ inline int ceil_div(int x, int y) {
+    return (x + y - 1) / y;
+}
+
+__global__ void matmul_kernel(const float *a,
     const float *b, float *out, const int M, const int K, const int N) {
-    __shared__ float sA[TILE_SIZE][TILE_SIZE];
-    __shared__ float sB[TILE_SIZE][TILE_SIZE];
+    __shared__ float sA[BLOCK_M][BLOCK_K];
+    __shared__ float sB[BLOCK_K][BLOCK_N];
 
-    int col_idx = blockIdx.x * TILE_SIZE + threadIdx.x;
-    int row_idx = blockIdx.y * TILE_SIZE + threadIdx.y;
+    int col_idx = blockIdx.x * BLOCK_N + threadIdx.x * THREAD_N;
+    int row_idx = blockIdx.y * BLOCK_M + threadIdx.y * THREAD_M;
 
-    float value = 0.0f;
-    for (int i = 0; i < (K + TILE_SIZE - 1) / TILE_SIZE; ++i) {
+    float acc[THREAD_M][THREAD_N] = {0.0f};
+    int num_threads = blockDim.x * blockDim.y;
+    int num_a_values = BLOCK_M * BLOCK_K;
+    int num_b_values = BLOCK_N * BLOCK_K;
+    int thread_id = threadIdx.y * blockDim.x + threadIdx.x;
+    for (int k_tile = 0; k_tile < ceil_div(K, BLOCK_K); ++k_tile) {
+        for (int offset = thread_id; offset < num_a_values; offset += num_threads) {
+            int smem_row = offset / BLOCK_K;
+            int smem_col = offset % BLOCK_K;
 
+            int global_row = blockIdx.y * BLOCK_M + smem_row;
+            int global_col = k_tile * BLOCK_K + smem_col;
 
-      if (row_idx < M && (i * TILE_SIZE + threadIdx.x) < K) {
-        sA[threadIdx.y][threadIdx.x] = a[row_idx * K + i * TILE_SIZE + threadIdx.x];
-      } else {
-        sA[threadIdx.y][threadIdx.x] = 0.0f;
-      }
+            if (global_row < M && global_col < K) {
+                sA[smem_row][smem_col] = a[global_row * K + global_col];
+            } else {
+                sA[smem_row][smem_col] = 0.0f;
+            }
+        }
 
-      if (col_idx < N && (i * TILE_SIZE + threadIdx.y) < K) {
-        sB[threadIdx.y][threadIdx.x] = b[(i * TILE_SIZE + threadIdx.y) * N + col_idx];
-      } else {
-        sB[threadIdx.y][threadIdx.x] = 0.0f;
-      }
+        for (int offset = thread_id; offset < num_b_values; offset += num_threads) {
+            int smem_row = offset / BLOCK_N;
+            int smem_col = offset % BLOCK_N;
+
+            int global_row = k_tile * BLOCK_K + smem_row;
+            int global_col = blockIdx.x * BLOCK_N + smem_col;
+            if (global_col < N && global_row < K) {
+                sB[smem_row][smem_col] = b[global_row * N + global_col];
+            } else {
+                sB[smem_row][smem_col] = 0.0f;
+            }
+        }
 
       __syncthreads();
 
-      for (int k = 0; k < TILE_SIZE; ++k) {
-        float a_element = sA[threadIdx.y][k];
-        float b_element = sB[k][threadIdx.x];
-
-        value += a_element * b_element;
+      for (int k = 0; k < BLOCK_K ; ++k) {
+        #pragma unroll
+        for (int m = 0; m < THREAD_M; ++m) {
+            #pragma unroll
+            for (int n = 0; n < THREAD_N; ++n)
+                acc[m][n] += sA[threadIdx.y * THREAD_M + m][k] * sB[k][threadIdx.x * THREAD_N + n];
+        }
       }
 
       __syncthreads();
     }
-    if (row_idx < M && col_idx < N) {
-      out[row_idx * N + col_idx] = value;
+
+    #pragma unroll
+    for (int m = 0; m < THREAD_M; ++m) {
+        #pragma unroll
+        for (int n = 0; n < THREAD_N; ++n)
+            if (row_idx + m < M && col_idx + n < N) {
+                out[(row_idx + m) * N + col_idx + n] = acc[m][n];
+            }
     }
 }
 
@@ -47,15 +82,12 @@ torch::Tensor matmul_cuda(torch::Tensor a, torch::Tensor b) {
   int K = a.size(1);
   int N = b.size(1);
   auto out = torch::empty({M, N}, a.options());
-  dim3 threads(32, 32);
 
-  int grid_x = (N + threads.x - 1) / threads.x;
-  int grid_y = (M + threads.y - 1) / threads.y;
-
-  dim3 blocks(grid_x, grid_y);
+  dim3 threads(THREADS_X, THREADS_Y);
+  dim3 blocks(ceil_div(N, BLOCK_N), ceil_div(M, BLOCK_M));
   matmul_kernel<<<blocks, threads>>>(
-    a.data_ptr<float>(), 
-    b.data_ptr<float>(), 
+    a.data_ptr<float>(),
+    b.data_ptr<float>(),
     out.data_ptr<float>(),
     M, K, N
     );

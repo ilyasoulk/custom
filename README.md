@@ -41,12 +41,24 @@ pytest tests/ -v
 python benchmarks/matmul_bench.py
 ```
 
+## Current MatMul Results
+
+Benchmark target: `1024 x 1024 x 1024` FP32 matmul on an RTX 3080 with TF32 disabled in the benchmark.
+
+| Kernel | Time |
+| --- | ---: |
+| Shared-memory tiled CUDA | 1.03 ms |
+| Register-tiled CUDA (`64x64x64`, `4x4` outputs/thread) | 225.86 us |
+| PyTorch cuBLAS | 149.96 us |
+
+The register-tiled kernel currently compiles with `64` registers/thread, `16 KB` shared memory, and no register spills.
+
 ## Roadmap & To-Do List
 
 ### Phase 1: Matrix Multiplication Deep Dive
 - [x] Naive 2D Grid MatMul
 - [x] Shared Memory Tiling (VRAM latency hiding)
-- [ ] Register Tiling / Thread Coarsening (Instruction-Level Parallelism)
+- [x] Register Tiling / Thread Coarsening (Instruction-Level Parallelism)
 - [ ] Tensor Cores Integration (using `wmma` API for mixed-precision FP16/FP32)
 
 ### Phase 2: Fused Element-Wise Kernels (Memory-Bound Ops)
