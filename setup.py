@@ -11,6 +11,7 @@ setup(
             sources=[
                 "csrc/bindings.cpp",
                 "csrc/matmul.cu",
+                "csrc/rms.cu",
             ],
             extra_compile_args={"cxx": ["-O3"], "nvcc": ["-O3", "--ptxas-options=-v"]},
         )

@@ -7,15 +7,18 @@ This repository contains custom, highly optimized PyTorch C++/CUDA extensions im
 ```text
 .
 ├── benchmarks/              # Benchmarking scripts against native PyTorch (cuBLAS/ATen)
-│   └── matmul_bench.py
+│   ├── matmul_bench.py
+│   └── rms_bench.py
 ├── custom/                  # Python module wrapping the C++ extensions
 │   ├── __init__.py
 │   └── ops.py
 ├── csrc/                    # Raw C++ and CUDA source files
-│   ├── matmul.cu            
+│   ├── matmul.cu
+│   ├── rms.cu
 │   └── bindings.cpp         # PyTorch pybind11 bindings
 ├── tests/                   # Pytest suite for correctness validation
-│   └── test_matmul.py
+│   ├── test_matmul.py
+│   └── test_rms.py
 ├── pyproject.toml           # Build system config and dependency management
 ├── setup.py                 # C++ extension compilation script
 └── README.md
@@ -53,6 +56,19 @@ Benchmark target: `1024 x 1024 x 1024` FP32 matmul on an RTX 3080 with TF32 disa
 
 The register-tiled kernel currently compiles with `64` registers/thread, `16 KB` shared memory, and no register spills.
 
+## Current RMSNorm Results
+
+Benchmark target: FP32 RMSNorm on an RTX 3080.
+
+| Shape | Custom CUDA | PyTorch eager | PyTorch builtin |
+| --- | ---: | ---: | ---: |
+| `B=1, S=1024, H=768` | 47.22 us | 282.07 us | 13.94 us |
+| `B=1, S=1024, H=2048` | 60.79 us | 117.22 us | 42.20 us |
+| `B=1, S=1024, H=4096` | 105.50 us | 217.71 us | 84.18 us |
+| `B=4, S=2048, H=4096` | 735.43 us | 1.54 ms | 663.96 us |
+
+The custom RMSNorm kernel beats PyTorch eager across the benchmarked shapes and is approaching the optimized PyTorch builtin path for larger hidden sizes.
+
 ## Roadmap & To-Do List
 
 ### Phase 1: Matrix Multiplication Deep Dive
@@ -63,7 +79,7 @@ The register-tiled kernel currently compiles with `64` registers/thread, `16 KB`
 
 ### Phase 2: Fused Element-Wise Kernels (Memory-Bound Ops)
 Modern transformers are heavily bottlenecked by memory bandwidth during normal operations. Fusing these reduces VRAM trips.
-- [ ] **Fused RMSNorm:** Standard in LLaMA/Mistral architectures.
+- [x] **Fused RMSNorm:** Standard in LLaMA/Mistral architectures.
 - [ ] **Fused SwiGLU Activation:** `x * sigmoid(beta * x) * W_v`. Combining this into one kernel saves massive memory bandwidth overhead.
 - [ ] **Rotary Positional Embeddings (RoPE):** Fused complex number rotations applied directly to the query and key heads in a single pass.
 - [ ] **Fused Cross-Entropy Loss:** Computing Softmax and Cross-Entropy in a single kernel without materializing the full logits matrix in VRAM.
